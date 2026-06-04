@@ -25,21 +25,31 @@ def create_basic_zoetrope(num_frames=33, radius=5.0, fps=30.0):
         idx += 1
     main_col_name = f"Basic_Zoetrope_{idx:03d}"
     main_col = bpy.data.collections.new(main_col_name)
+    main_col['zoe_type'] = 'BASIC'
+    main_col['zoe_radius'] = radius
+    main_col['zoe_frames'] = num_frames
     bpy.context.scene.collection.children.link(main_col)
     
     frames_col = bpy.data.collections.new("Frames")
     main_col.children.link(frames_col)
     
+    multiplier = max(1, round(1000 / num_frames))
+    if multiplier % 2 != 0:
+        multiplier += 1
+    total_verts = num_frames * multiplier
+    main_col['zoe_verts_total'] = total_verts
+    main_col['zoe_verts_per_frame'] = multiplier
+    
     verts = []
     edges = []
-    angle_step = (2 * math.pi) / num_frames
+    angle_step = (2 * math.pi) / total_verts
     
-    for i in range(num_frames):
+    for i in range(total_verts):
         angle = i * angle_step
         x = radius * math.cos(angle)
         y = radius * math.sin(angle)
         verts.append((x, y, 0))
-        edges.append((i, (i + 1) % num_frames))
+        edges.append((i, (i + 1) % total_verts))
         
     mesh = bpy.data.meshes.new("Basic_Zoetrope_Mesh")
     mesh.from_pydata(verts, edges, [])
@@ -62,8 +72,9 @@ def create_basic_zoetrope(num_frames=33, radius=5.0, fps=30.0):
     drv.expression = expr
     zoetrope['base_driver_expr'] = expr
     
+    frame_angle_step = (2 * math.pi) / num_frames
     for i in range(num_frames):
-        angle = i * angle_step
+        angle = i * frame_angle_step
         empty = bpy.data.objects.new(f"Frame_{(i+1):03d}", None)
         empty.empty_display_size = 0.5
         empty.empty_display_type = 'ARROWS'
@@ -226,46 +237,52 @@ def create_ring_gear(name, num_teeth, module, thickness=0.2, rim_thickness=0.3, 
     obj['ring_teeth'] = num_teeth
     return obj
 
-def find_best_ring_teeth(num_planet_gears, base_size=64):
-    best_config = None
-    for planet_teeth in range(32, 6, -1):
-        for sun_multiplier in range(7, 0, -1):
-            sun_teeth = planet_teeth * sun_multiplier
+def find_best_ring_teeth(num_planet_gears, planet_size=1.0):
+    valid_configs = []
+    for planet_teeth in range(6, 33):
+        for sun_teeth in range(planet_teeth, planet_teeth * 15):
             ring_teeth = sun_teeth + 2 * planet_teeth
             if (ring_teeth + sun_teeth) % num_planet_gears != 0:
                 continue
+            
             sun_radius = sun_teeth / 2
             planet_radius = planet_teeth / 2
             carrier_radius = sun_radius + planet_radius
             spacing = (2 * math.pi * carrier_radius) / num_planet_gears
             planet_diameter = 2 * planet_radius
-            if planet_diameter > spacing * 0.93 and planet_diameter < spacing * 0.96:
-                return (ring_teeth, sun_teeth, planet_teeth)
-    
-    for planet_teeth in range(32, 6, -1):
-        for sun_multiplier in range(7, 0, -1):
-            sun_teeth = planet_teeth * sun_multiplier
-            ring_teeth = sun_teeth + 2 * planet_teeth
-            if (ring_teeth + sun_teeth) % num_planet_gears != 0:
-                continue
-            sun_radius = sun_teeth / 2
-            planet_radius = planet_teeth / 2
-            carrier_radius = sun_radius + planet_radius
-            spacing = (2 * math.pi * carrier_radius) / num_planet_gears
-            planet_diameter = 2 * planet_radius
-            if planet_diameter < spacing * 0.95:
-                if not best_config:
-                    best_config = (ring_teeth, sun_teeth, planet_teeth)
-                return best_config
+            
+            if planet_diameter < spacing * 0.92:
+                ratio = planet_teeth / sun_teeth
+                valid_configs.append((ratio, ring_teeth, sun_teeth, planet_teeth))
                 
-    ring_teeth = num_planet_gears * 8
-    planet_teeth = 12
-    sun_teeth = ring_teeth - 2 * planet_teeth
-    return (ring_teeth, sun_teeth, planet_teeth)
+    if not valid_configs:
+        ring_teeth = num_planet_gears * 8
+        planet_teeth = 12
+        sun_teeth = ring_teeth - 2 * planet_teeth
+        return (ring_teeth, sun_teeth, planet_teeth)
+        
+    best_per_ratio = {}
+    for ratio, r_t, s_t, p_t in valid_configs:
+        round_ratio = round(ratio, 4)
+        if round_ratio not in best_per_ratio:
+            best_per_ratio[round_ratio] = (r_t, s_t, p_t)
+        else:
+            curr_best = best_per_ratio[round_ratio]
+            if abs(p_t - 16) < abs(curr_best[2] - 16):
+                best_per_ratio[round_ratio] = (r_t, s_t, p_t)
+                
+    unique_configs = list(best_per_ratio.items())
+    unique_configs.sort(key=lambda x: x[0])
+    
+    idx = int(planet_size * (len(unique_configs) - 1))
+    if idx < 0: idx = 0
+    if idx >= len(unique_configs): idx = len(unique_configs) - 1
+    
+    return unique_configs[idx][1]
 
-def generate_planetary_gearbox(num_planet_gears=10, target_ring_radius=4.0, col=None):
+def generate_planetary_gearbox(num_planet_gears=10, target_ring_radius=4.0, planet_size=1.0, col=None):
     if col is None: col = bpy.context.collection
-    ring_teeth, sun_teeth, planet_teeth = find_best_ring_teeth(num_planet_gears)
+    ring_teeth, sun_teeth, planet_teeth = find_best_ring_teeth(num_planet_gears, planet_size=planet_size)
     module = (2 * target_ring_radius) / ring_teeth
     sun_radius = (module * sun_teeth) / 2
     planet_radius = (module * planet_teeth) / 2
@@ -274,6 +291,8 @@ def generate_planetary_gearbox(num_planet_gears=10, target_ring_radius=4.0, col=
     
     sun = create_gear("Sun_Gear", sun_teeth, module, 0.3, col=col)
     ring = create_ring_gear("Ring_Gear", ring_teeth, module, 0.3, 0.5, col=col)
+    if planet_teeth % 2 != 0:
+        ring.rotation_euler[2] = math.pi / ring_teeth
     
     carrier = bpy.data.objects.new("Carrier", None)
     carrier.empty_display_type = 'ARROWS'
@@ -306,7 +325,7 @@ def generate_planetary_gearbox(num_planet_gears=10, target_ring_radius=4.0, col=
                    'Rp': planet_radius, 'Rc': carrier_radius}
     }
 
-def create_planetary_zoetrope(P=10, F=5, target_ring_radius=4.0, fps=30.0):
+def create_planetary_zoetrope(P=10, F=5, target_ring_radius=4.0, planet_size=1.0, fps=30.0):
     idx = 1
     while bpy.data.collections.get(f"Planetary_Zoetrope_{idx:03d}"):
         idx += 1
@@ -317,9 +336,12 @@ def create_planetary_zoetrope(P=10, F=5, target_ring_radius=4.0, fps=30.0):
     frames_col = bpy.data.collections.new("Frames")
     main_col.children.link(frames_col)
             
-    result = generate_planetary_gearbox(P, target_ring_radius=target_ring_radius, col=main_col)
+    result = generate_planetary_gearbox(P, target_ring_radius=target_ring_radius, planet_size=planet_size, col=main_col)
     sun, ring, carrier, planets = result['sun'], result['ring'], result['carrier'], result['planets']
     Ns, Nr, Np, Rp, Rc = result['params']['Ns'], result['params']['Nr'], result['params']['Np'], result['params']['Rp'], result['params']['Rc']
+    
+    main_col['zoe_type'] = 'PLANETARY'
+    main_col['zoe_planet_radius'] = Rp
     
     S_rel = - (P // F) + 1.0 / F
     if S_rel == 0: S_rel = 1.0 / F
@@ -353,7 +375,10 @@ def create_planetary_zoetrope(P=10, F=5, target_ring_radius=4.0, fps=30.0):
     
     for i, p in enumerate(planets):
         angle = i * (2 * math.pi / P)
-        planet_offset = angle * (1 + Ns / Np) + (math.pi / Np)
+        if Np % 2 == 0:
+            planet_offset = angle * (1 + Ns / Np) + (math.pi / Np)
+        else:
+            planet_offset = angle * (1 + Ns / Np)
         
         drv_rot = p.driver_add('rotation_euler', 2).driver
         drv_rot.type = 'SCRIPTED'
@@ -366,7 +391,10 @@ def create_planetary_zoetrope(P=10, F=5, target_ring_radius=4.0, fps=30.0):
     for n in range(P * F):
         crot = n / P
         planet_idx = (-n) % P
-        offset_turns = planet_idx * (1 + Ns / Np) / P + 1 / (2 * Np)
+        if Np % 2 == 0:
+            offset_turns = planet_idx * (1 + Ns / Np) / P + 1 / (2 * Np)
+        else:
+            offset_turns = planet_idx * (1 + Ns / Np) / P
         prot_turns = S_rel * crot + offset_turns
         
         phi_turns = -prot_turns % 1.0
@@ -495,6 +523,26 @@ class ZoetropeMappingItem(bpy.types.PropertyGroup):
         ],
         default='INTERPOLATE'
     )
+def get_zoetrope_rpm(self):
+    fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+    if self.mode == 'BASIC':
+        frames = self.basic_frames
+    else:
+        frames = self.planets * self.subframes
+        
+    if frames == 0: return 0.0
+    return (60.0 * fps) / frames
+
+def set_zoetrope_rpm(self, value):
+    fps = bpy.context.scene.render.fps / bpy.context.scene.render.fps_base
+    if value <= 0: return
+    target_frames = round((60.0 * fps) / value)
+    if target_frames < 2: target_frames = 2
+    
+    if self.mode == 'BASIC':
+        self.basic_frames = target_frames
+    else:
+        self.subframes = max(1, round(target_frames / self.planets))
 
 class ZoetropeGeneratorSettings(bpy.types.PropertyGroup):
     mode: bpy.props.EnumProperty(
@@ -504,6 +552,12 @@ class ZoetropeGeneratorSettings(bpy.types.PropertyGroup):
             ('PLANETARY', "Planetary", "Planetary Gear Zoetrope", 'MOD_ARRAY', 1)
         ],
         default='BASIC'
+    )
+    target_rpm: bpy.props.FloatProperty(
+        name="Target RPM",
+        description="Target Rotational Speed. Automatically scales the number of frames to maintain sync",
+        get=get_zoetrope_rpm,
+        set=set_zoetrope_rpm
     )
     radius: bpy.props.FloatProperty(
         name="Radius",
@@ -530,6 +584,13 @@ class ZoetropeGeneratorSettings(bpy.types.PropertyGroup):
         min=1,
         description="Number of frames per planet gear"
     )
+    planet_size: bpy.props.FloatProperty(
+        name="Planet Size",
+        default=1.0,
+        min=0.0,
+        max=1.0,
+        description="Scale planet gears relative to sun (1.0 = Max Planets, 0.0 = Max Sun)"
+    )
     baker_source: bpy.props.PointerProperty(
         name="Source Collection",
         type=bpy.types.Collection,
@@ -540,6 +601,12 @@ class ZoetropeGeneratorSettings(bpy.types.PropertyGroup):
         name="Active Zoetrope",
         type=bpy.types.Collection,
         description="Select a generated Zoetrope collection to tweak its live settings"
+    )
+    export_dir: bpy.props.StringProperty(
+        name="Export Directory",
+        description="Directory to save the exported OBJ frames",
+        subtype='DIR_PATH',
+        default=""
     )
 
 class OBJECT_OT_generate_zoetrope(bpy.types.Operator):
@@ -556,10 +623,89 @@ class OBJECT_OT_generate_zoetrope(bpy.types.Operator):
             col = create_basic_zoetrope(num_frames=settings.basic_frames, radius=settings.radius, fps=fps)
             self.report({'INFO'}, f"Generated Basic Zoetrope ({settings.basic_frames} frames)")
         elif settings.mode == 'PLANETARY':
-            col = create_planetary_zoetrope(P=settings.planets, F=settings.subframes, target_ring_radius=settings.radius, fps=fps)
+            col = create_planetary_zoetrope(P=settings.planets, F=settings.subframes, target_ring_radius=settings.radius, planet_size=settings.planet_size, fps=fps)
             self.report({'INFO'}, f"Generated Planetary Zoetrope ({settings.planets * settings.subframes} frames)")
             
         settings.active_zoetrope = col
+        return {'FINISHED'}
+
+class OBJECT_OT_create_frame_template(bpy.types.Operator):
+    """Generate a template mesh representing one frame's bounds for the active Zoetrope"""
+    bl_idname = "object.create_frame_template"
+    bl_label = "Make Frame Template"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = context.scene.zoetrope_generator
+        zoe = settings.active_zoetrope
+        if not zoe:
+            self.report({'WARNING'}, "No active zoetrope selected!")
+            return {'CANCELLED'}
+            
+        zoe_type = zoe.get('zoe_type', None)
+        if not zoe_type:
+            self.report({'WARNING'}, "Selected collection is not a recognized generated zoetrope!")
+            return {'CANCELLED'}
+            
+        if zoe_type == 'BASIC':
+            radius = zoe.get('zoe_radius', 5.0)
+            frames = zoe.get('zoe_frames', 45)
+            
+            import bmesh
+            mesh = bpy.data.meshes.new("Frame_Template_Mesh")
+            obj = bpy.data.objects.new("Frame_Template", mesh)
+            context.collection.objects.link(obj)
+            
+            bm = bmesh.new()
+            center = bm.verts.new((-radius, 0, 0))
+            
+            multiplier = max(1, round(1000 / frames))
+            if multiplier % 2 != 0:
+                multiplier += 1
+            total_verts = frames * multiplier
+            step = (2 * math.pi) / total_verts
+            
+            segments = multiplier
+            start_angle = - (segments / 2) * step
+            
+            arc_verts = []
+            for i in range(segments + 1):
+                a = start_angle + i * step
+                v = bm.verts.new((-radius + radius * math.cos(a), radius * math.sin(a), 0))
+                arc_verts.append(v)
+                
+            for i in range(segments):
+                bm.faces.new((center, arc_verts[i], arc_verts[i+1]))
+                
+            bm.to_mesh(mesh)
+            bm.free()
+            
+            obj.display_type = 'WIRE'
+            obj.show_wire = True
+            obj.show_all_edges = True
+            obj.show_in_front = True
+            
+            self.report({'INFO'}, f"Generated Basic Frame Template (Radius: {radius}, Arc: {360/frames:.1f}°)")
+            
+        elif zoe_type == 'PLANETARY':
+            rp = zoe.get('zoe_planet_radius', 1.0)
+            
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=32, 
+                radius=rp, 
+                depth=0.1, 
+                end_fill_type='NGON', 
+                location=(0, 0, 0)
+            )
+            obj = context.active_object
+            obj.name = "Frame_Template"
+            obj.display_type = 'WIRE'
+            obj.show_wire = True
+            obj.show_all_edges = True
+            obj.show_in_front = True
+            
+            self.report({'INFO'}, f"Generated Planetary Frame Template (Radius: {rp:.2f})")
+            
         return {'FINISHED'}
 
 class OBJECT_OT_clear_mappings(bpy.types.Operator):
@@ -603,14 +749,15 @@ class OBJECT_OT_batch_zoetrope_baker(bpy.types.Operator):
         empties.sort(key=lambda x: x.name)
 
         max_frame = 0
-        meshes = []
+        valid_types = {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'VOLUME', 'POINTCLOUD'}
+        exportable_objects = []
         for obj in anim_col.all_objects:
-            if obj.type == 'MESH':
-                meshes.append(obj)
+            if obj.type in valid_types:
+                exportable_objects.append(obj)
             if obj.animation_data and obj.animation_data.action:
                 max_frame = max(max_frame, obj.animation_data.action.frame_range[1])
                 
-        if not meshes:
+        if not exportable_objects:
             self.report({'WARNING'}, f"No meshes found in {anim_col.name}!")
             return
 
@@ -677,18 +824,35 @@ class OBJECT_OT_batch_zoetrope_baker(bpy.types.Operator):
             depsgraph = context.evaluated_depsgraph_get()
             
             baked_meshes = []
-            for m in meshes:
-                eval_m = m.evaluated_get(depsgraph)
-                new_mesh = bpy.data.meshes.new_from_object(eval_m, preserve_all_data_layers=True, depsgraph=depsgraph)
-                new_obj = bpy.data.objects.new(f"Baked_{i+1:03d}_{m.name}", new_mesh)
-                new_obj.matrix_world = m.matrix_world.copy()
-                baked_collection.objects.link(new_obj)
+            for m in exportable_objects:
+                for inst in depsgraph.object_instances:
+                    is_match = False
+                    if inst.object.original.name == m.name:
+                        is_match = True
+                    elif inst.parent and inst.parent.original.name == m.name:
+                        is_match = True
+                        
+                    if is_match and inst.object.type == 'MESH':
+                        try:
+                            eval_mesh = inst.object.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+                            real_mesh = eval_mesh.copy()
+                            inst.object.to_mesh_clear()
+                            
+                            new_obj = bpy.data.objects.new(f"Baked_{i+1:03d}_{m.name}", real_mesh)
+                            new_obj.matrix_world = inst.matrix_world.copy()
+                            baked_collection.objects.link(new_obj)
+                            
+                            if hasattr(inst.object.data, 'materials'):
+                                for mat in inst.object.data.materials:
+                                    if mat and mat.name not in real_mesh.materials:
+                                        real_mesh.materials.append(mat)
+                                        
+                            baked_meshes.append(new_obj)
+                        except Exception:
+                            pass
                 
-                for mat in m.data.materials:
-                    if mat.name not in new_mesh.materials:
-                        new_mesh.materials.append(mat)
-                    
-                baked_meshes.append(new_obj)
+            if not baked_meshes:
+                continue
                 
             bpy.ops.object.select_all(action='DESELECT')
             for b in baked_meshes:
@@ -707,6 +871,192 @@ class OBJECT_OT_batch_zoetrope_baker(bpy.types.Operator):
                 combined.matrix_parent_inverse = mathutils.Matrix.Identity(4)
                 combined.matrix_local = orig_matrix
                 
+        context.scene.frame_set(1)
+        
+        if layer_col:
+            layer_col.exclude = was_exclude
+
+class OBJECT_OT_export_zoetrope_frames(bpy.types.Operator):
+    """Export Mapped Animations to OBJ Frames"""
+    bl_idname = "object.export_zoetrope_frames"
+    bl_label = "Export Frames to OBJ"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = context.scene.zoetrope_generator
+        outdir = bpy.path.abspath(settings.export_dir)
+        
+        if not outdir:
+            self.report({'WARNING'}, "Please specify an export directory.")
+            return {'CANCELLED'}
+            
+        import os
+        if not os.path.exists(outdir):
+            try:
+                os.makedirs(outdir)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to create directory: {e}")
+                return {'CANCELLED'}
+
+        count = 0
+        for item in context.scene.zoetrope_mappings:
+            if not item.target_zoetrope or not item.anim_collection:
+                continue
+            
+            self.export_single_mapping(context, item.anim_collection, item.target_zoetrope, item.mismatch_strategy, outdir)
+            count += 1
+            
+        if count == 0:
+            self.report({'WARNING'}, "No mappings found to export.")
+            return {'CANCELLED'}
+            
+        self.report({'INFO'}, f"Successfully exported {count} animations!")
+        return {'FINISHED'}
+        
+    def export_single_mapping(self, context, anim_col, target_zoetrope, mismatch_strategy, outdir):
+        empties = [obj for obj in target_zoetrope.all_objects if obj.name.startswith("Frame_") and obj.type == 'EMPTY']
+        if not empties:
+            self.report({'WARNING'}, f"No 'Frame_XXX' empties found in {target_zoetrope.name}!")
+            return
+            
+        empties.sort(key=lambda x: x.name)
+
+        max_frame = 0
+        valid_types = {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'VOLUME', 'POINTCLOUD'}
+        exportable_objects = []
+        for obj in anim_col.all_objects:
+            if obj.type in valid_types:
+                exportable_objects.append(obj)
+            if obj.animation_data and obj.animation_data.action:
+                max_frame = max(max_frame, obj.animation_data.action.frame_range[1])
+                
+        if not exportable_objects:
+            self.report({'WARNING'}, f"No exportable objects found in {anim_col.name}!")
+            return
+
+        if max_frame == 0:
+            self.report({'WARNING'}, f"No actions with keyframes found in {anim_col.name}! Defaulting to 24 frames.")
+            max_frame = 24
+
+        num_empties = len(empties)
+        
+        def find_layer_collection(parent, name):
+            if parent.name == name: return parent
+            for child in parent.children:
+                res = find_layer_collection(child, name)
+                if res: return res
+            return None
+            
+        layer_col = find_layer_collection(context.view_layer.layer_collection, anim_col.name)
+        was_exclude = False
+        if layer_col:
+            was_exclude = layer_col.exclude
+            layer_col.exclude = False
+            
+        depsgraph = context.evaluated_depsgraph_get()
+
+        if mismatch_strategy == 'CLIP':
+            if max_frame < num_empties:
+                start_empty_idx = num_empties - int(max_frame)
+                loop_count = int(max_frame)
+            else:
+                start_empty_idx = 0
+                loop_count = num_empties
+        else:
+            start_empty_idx = 0
+            loop_count = num_empties
+
+        context.window_manager.progress_begin(0, loop_count)
+        
+        # Deselect all
+        bpy.ops.object.select_all(action='DESELECT')
+
+        import os
+        for i in range(loop_count):
+            empty_idx = start_empty_idx + i
+            if empty_idx >= num_empties:
+                break
+                
+            if mismatch_strategy == 'INTERPOLATE':
+                target_fbx_frame = 1 + (i / max(1, loop_count - 1)) * (max_frame - 1)
+            else:
+                target_fbx_frame = i + 1
+                
+            context.scene.frame_set(int(target_fbx_frame))
+            context.view_layer.update()
+            depsgraph = context.evaluated_depsgraph_get()
+            
+            temp_objects = []
+            for m in exportable_objects:
+                for inst in depsgraph.object_instances:
+                    is_match = False
+                    if inst.object.original.name == m.name:
+                        is_match = True
+                    elif inst.parent and inst.parent.original.name == m.name:
+                        is_match = True
+                        
+                    if is_match and inst.object.type == 'MESH':
+                        try:
+                            eval_mesh = inst.object.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+                            real_mesh = eval_mesh.copy()
+                            inst.object.to_mesh_clear()
+                            
+                            new_obj = bpy.data.objects.new(f"Temp_Export_{m.name}", real_mesh)
+                            new_obj.matrix_world = inst.matrix_world.copy()
+                            context.scene.collection.objects.link(new_obj)
+                            
+                            # Ensure vertex colors are active so OBJ exporter picks them up
+                            if hasattr(real_mesh, 'color_attributes') and real_mesh.color_attributes:
+                                real_mesh.color_attributes.active_color = real_mesh.color_attributes[0]
+                            elif hasattr(real_mesh, 'vertex_colors') and real_mesh.vertex_colors:
+                                real_mesh.vertex_colors.active_index = 0
+                            
+                            if hasattr(inst.object.data, 'materials'):
+                                for mat in inst.object.data.materials:
+                                    if mat and mat.name not in real_mesh.materials:
+                                        real_mesh.materials.append(mat)
+                                        
+                            temp_objects.append(new_obj)
+                        except Exception:
+                            pass
+                
+            if not temp_objects:
+                continue
+                
+            bpy.ops.object.select_all(action='DESELECT')
+            for temp_obj in temp_objects:
+                temp_obj.select_set(True)
+                
+            context.view_layer.objects.active = temp_objects[0]
+            
+            prefix = anim_col.name.replace(" ", "_")
+            out_path = os.path.join(outdir, f"{prefix}_frame_{i+1:03d}.obj")
+            
+            try:
+                try:
+                    # Blender 3.2+ new C++ exporter
+                    try:
+                        bpy.ops.wm.obj_export(filepath=out_path, export_selected_objects=True, export_colors=True, export_triangulated_mesh=True)
+                    except TypeError:
+                        # Fallback if export_colors or export_triangulated_mesh is unrecognized
+                        bpy.ops.wm.obj_export(filepath=out_path, export_selected_objects=True)
+                except AttributeError:
+                    # Fallback to old python exporter (pre-3.2)
+                    bpy.ops.export_scene.obj(filepath=out_path, use_selection=True, use_triangles=True)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to export OBJ {out_path}: {e}")
+                print(f"Export Error: {e}")
+                
+            # Cleanup memory
+            temp_meshes = [obj.data for obj in temp_objects if obj.data]
+            for temp_obj in temp_objects:
+                bpy.data.objects.remove(temp_obj, do_unlink=True)
+            for mesh in temp_meshes:
+                bpy.data.meshes.remove(mesh, do_unlink=True)
+                    
+            context.window_manager.progress_update(i + 1)
+            
+        context.window_manager.progress_end()
         context.scene.frame_set(1)
         
         if layer_col:
@@ -737,14 +1087,23 @@ class VIEW3D_PT_zoetrope_main(bpy.types.Panel):
         col.label(text=f"Scene FPS: {fps:.2f} (Target)", icon='TIME')
         
         col.separator()
+        col.prop(settings, "target_rpm")
+        col.separator()
         
         if settings.mode == 'BASIC':
             col.prop(settings, "basic_frames")
+            total_frames = settings.basic_frames
         else:
             row = col.row(align=True)
             row.prop(settings, "planets")
             row.prop(settings, "subframes")
-            col.label(text=f"Total Frames: {settings.planets * settings.subframes}", icon='RENDER_ANIMATION')
+            col.prop(settings, "planet_size", slider=True)
+            total_frames = settings.planets * settings.subframes
+            col.label(text=f"Total Frames: {total_frames}", icon='RENDER_ANIMATION')
+            
+        if total_frames > 0:
+            deg_per_frame = 360.0 / total_frames
+            col.label(text=f"Degrees per Frame: {deg_per_frame:.2f}°", icon='DRIVER_ROTATIONAL_DIFFERENCE')
             
         layout.separator()
         
@@ -766,10 +1125,24 @@ class VIEW3D_PT_zoetrope_settings(bpy.types.Panel):
         box.prop(settings, "active_zoetrope")
         
         if settings.active_zoetrope:
+            zoe = settings.active_zoetrope
             col = box.column(align=True)
-            col.prop(settings.active_zoetrope, "zoe_rot_z")
-            col.prop(settings.active_zoetrope, "zoe_scale")
-            col.prop(settings.active_zoetrope, "zoe_invert", toggle=True)
+            col.prop(zoe, "zoe_rot_z")
+            col.prop(zoe, "zoe_scale")
+            col.prop(zoe, "zoe_invert", toggle=True)
+            
+            if zoe.get('zoe_type') == 'BASIC':
+                box.separator()
+                v_total = zoe.get('zoe_verts_total', 0)
+                v_frame = zoe.get('zoe_verts_per_frame', 0)
+                frames = zoe.get('zoe_frames', 1)
+                box.label(text=f"Total Vertices: {v_total}", icon='MESH_CIRCLE')
+                box.label(text=f"Vertices per Frame: {v_frame}", icon='SNAP_VERTEX')
+                if frames > 0 and v_total % frames != 0:
+                    box.label(text=f"ERROR: Vertices not divisible by {frames}!", icon='ERROR')
+            
+            box.separator()
+            box.operator("object.create_frame_template", icon='MESH_CYLINDER')
 
 class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
@@ -812,6 +1185,14 @@ class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
                 row.scale_y = 1.5
                 row.operator("object.batch_zoetrope_baker", icon='RENDER_ANIMATION', text="Bake Animation")
                 
+                layout.separator()
+                box = layout.box()
+                box.label(text="Export to OBJ", icon='EXPORT')
+                box.prop(settings, "export_dir")
+                row = box.row()
+                row.scale_y = 1.5
+                row.operator("object.export_zoetrope_frames", icon='MESH_DATA', text="Export Frames")
+                
             else:
                 layout.separator()
                 layout.label(text="Animation Mappings:", icon='GRAPH')
@@ -844,6 +1225,14 @@ class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
                 row = layout.row()
                 row.scale_y = 1.5
                 row.operator("object.batch_zoetrope_baker", icon='RENDER_ANIMATION')
+                
+                layout.separator()
+                box = layout.box()
+                box.label(text="Export to OBJ", icon='EXPORT')
+                box.prop(settings, "export_dir")
+                row = box.row()
+                row.scale_y = 1.5
+                row.operator("object.export_zoetrope_frames", icon='MESH_DATA', text="Export Frames")
 
 # ==============================================================================
 # REGISTRATION
@@ -853,8 +1242,10 @@ classes = (
     ZoetropeMappingItem,
     ZoetropeGeneratorSettings,
     OBJECT_OT_generate_zoetrope,
+    OBJECT_OT_create_frame_template,
     OBJECT_OT_clear_mappings,
     OBJECT_OT_batch_zoetrope_baker,
+    OBJECT_OT_export_zoetrope_frames,
     VIEW3D_PT_zoetrope_main,
     VIEW3D_PT_zoetrope_settings,
     VIEW3D_PT_zoetrope_baker
