@@ -26,8 +26,8 @@ from datetime import datetime
 # ========================================================================
 # AUTO-UPDATER SETTINGS
 # ========================================================================
-GITHUB_USER = "CorridorCrew"
-GITHUB_REPO = "Zoetrope_Tools"
+GITHUB_USER = "autonk"
+GITHUB_REPO = "ZOETROPE-PROJECT"
 GITHUB_BRANCH = "main"
 GITHUB_FILE_PATH = "ADDON/zoetrope_generator_addon.py"
 GITHUB_TOKEN = "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"
