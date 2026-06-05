@@ -1062,6 +1062,248 @@ class OBJECT_OT_export_zoetrope_frames(bpy.types.Operator):
         if layer_col:
             layer_col.exclude = was_exclude
 
+class OBJECT_OT_import_zoetrope_frames(bpy.types.Operator):
+    """Import OBJ Frames and map them to Zoetrope"""
+    bl_idname = "object.import_zoetrope_frames"
+    bl_label = "Import Frames from OBJ"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = context.scene.zoetrope_generator
+        outdir = bpy.path.abspath(settings.export_dir)
+        
+        if not outdir:
+            self.report({'WARNING'}, "Please specify an export directory.")
+            return {'CANCELLED'}
+            
+        import os
+        if not os.path.exists(outdir):
+            self.report({'ERROR'}, "Export directory does not exist.")
+            return {'CANCELLED'}
+            
+        count = 0
+        for item in context.scene.zoetrope_mappings:
+            if not item.target_zoetrope or not item.anim_collection:
+                continue
+            
+            self.import_single_mapping(context, item.anim_collection, item.target_zoetrope, item.mismatch_strategy, outdir)
+            count += 1
+            
+        if count == 0:
+            self.report({'WARNING'}, "No mappings found to import.")
+            return {'CANCELLED'}
+            
+        return {'FINISHED'}
+
+    def import_single_mapping(self, context, anim_col, target_zoetrope, mismatch_strategy, outdir):
+        import os
+        import glob
+        import mathutils
+        
+        prefix = anim_col.name.replace(" ", "_")
+        search_pattern = os.path.join(outdir, f"{prefix}_frame_*.obj")
+        files = sorted(glob.glob(search_pattern))
+        
+        if not files:
+            self.report({'WARNING'}, f"No OBJs found for {anim_col.name} in {outdir}")
+            return
+            
+        empties = [obj for obj in target_zoetrope.all_objects if obj.name.startswith("Frame_") and obj.type == 'EMPTY']
+        if not empties:
+            self.report({'WARNING'}, f"No 'Frame_XXX' empties found in {target_zoetrope.name}!")
+            return
+            
+        empties.sort(key=lambda x: x.name)
+        num_empties = len(empties)
+        max_frame = len(files)
+        
+        imported_collection = None
+        for child in target_zoetrope.children:
+            if child.name == "Imported_Frames":
+                imported_collection = child
+                break
+                
+        if imported_collection:
+            for obj in list(imported_collection.objects):
+                bpy.data.objects.remove(obj, do_unlink=True)
+        else:
+            imported_collection = bpy.data.collections.new("Imported_Frames")
+            target_zoetrope.children.link(imported_collection)
+            
+        if mismatch_strategy == 'CLIP':
+            if max_frame < num_empties:
+                start_empty_idx = num_empties - int(max_frame)
+                loop_count = int(max_frame)
+            else:
+                start_empty_idx = 0
+                loop_count = num_empties
+        else:
+            start_empty_idx = 0
+            loop_count = num_empties
+            
+        context.window_manager.progress_begin(0, loop_count)
+        
+        for i in range(loop_count):
+            empty_idx = start_empty_idx + i
+            if empty_idx >= num_empties:
+                break
+                
+            if mismatch_strategy == 'INTERPOLATE':
+                target_file_idx = int(round((i / max(1, loop_count - 1)) * (max_frame - 1)))
+            else:
+                target_file_idx = i
+                
+            if target_file_idx >= len(files):
+                continue
+                
+            filepath = files[target_file_idx]
+            
+            objs_before = set(bpy.data.objects)
+            
+            try:
+                try:
+                    bpy.ops.wm.obj_import(filepath=filepath)
+                except AttributeError:
+                    bpy.ops.import_scene.obj(filepath=filepath)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to import {os.path.basename(filepath)}: {e}")
+                continue
+                
+            objs_after = set(bpy.data.objects)
+            imported_objs = list(objs_after - objs_before)
+            
+            if not imported_objs:
+                continue
+                
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in imported_objs:
+                obj.select_set(True)
+            context.view_layer.objects.active = imported_objs[0]
+            
+            if len(imported_objs) > 1:
+                bpy.ops.object.join()
+                
+            combined = context.view_layer.objects.active
+            combined.name = f"Imported_{i+1:03d}_{prefix}"
+            
+            imported_collection.objects.link(combined)
+            for coll in combined.users_collection:
+                if coll != imported_collection:
+                    coll.objects.unlink(combined)
+                    
+            empty = empties[empty_idx]
+            if empty:
+                orig_matrix = combined.matrix_world.copy()
+                combined.parent = empty
+                combined.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+                combined.matrix_local = orig_matrix
+                
+            context.window_manager.progress_update(i + 1)
+            
+        context.window_manager.progress_end()
+
+class OBJECT_OT_import_raw_zoetrope_frames(bpy.types.Operator):
+    """Import all OBJ files from a directory onto the active zoetrope sequentially"""
+    bl_idname = "object.import_raw_zoetrope_frames"
+    bl_label = "Import Raw Frames"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        settings = context.scene.zoetrope_generator
+        zoe = settings.active_zoetrope
+        outdir = bpy.path.abspath(settings.export_dir)
+        
+        if not zoe:
+            self.report({'WARNING'}, "No active zoetrope selected.")
+            return {'CANCELLED'}
+            
+        import os
+        if not outdir or not os.path.exists(outdir):
+            self.report({'ERROR'}, "Invalid or missing frames directory. Set the Export Directory below.")
+            return {'CANCELLED'}
+            
+        import glob
+        import mathutils
+        
+        search_pattern = os.path.join(outdir, "*.obj")
+        files = sorted(glob.glob(search_pattern))
+        
+        if not files:
+            self.report({'WARNING'}, f"No OBJ files found in {outdir}")
+            return {'CANCELLED'}
+            
+        empties = [obj for obj in zoe.all_objects if obj.name.startswith("Frame_") and obj.type == 'EMPTY']
+        if not empties:
+            self.report({'WARNING'}, f"No 'Frame_XXX' empties found in {zoe.name}!")
+            return {'CANCELLED'}
+            
+        empties.sort(key=lambda x: x.name)
+        num_empties = len(empties)
+        
+        imported_collection = None
+        for child in zoe.children:
+            if child.name == "Imported_Frames":
+                imported_collection = child
+                break
+                
+        if imported_collection:
+            for obj in list(imported_collection.objects):
+                bpy.data.objects.remove(obj, do_unlink=True)
+        else:
+            imported_collection = bpy.data.collections.new("Imported_Frames")
+            zoe.children.link(imported_collection)
+            
+        loop_count = min(len(files), num_empties)
+        context.window_manager.progress_begin(0, loop_count)
+        
+        for i in range(loop_count):
+            filepath = files[i]
+            
+            objs_before = set(bpy.data.objects)
+            
+            try:
+                try:
+                    bpy.ops.wm.obj_import(filepath=filepath)
+                except AttributeError:
+                    bpy.ops.import_scene.obj(filepath=filepath)
+            except Exception as e:
+                self.report({'ERROR'}, f"Failed to import {os.path.basename(filepath)}: {e}")
+                continue
+                
+            objs_after = set(bpy.data.objects)
+            imported_objs = list(objs_after - objs_before)
+            
+            if not imported_objs:
+                continue
+                
+            bpy.ops.object.select_all(action='DESELECT')
+            for obj in imported_objs:
+                obj.select_set(True)
+            context.view_layer.objects.active = imported_objs[0]
+            
+            if len(imported_objs) > 1:
+                bpy.ops.object.join()
+                
+            combined = context.view_layer.objects.active
+            combined.name = f"Imported_{i+1:03d}_{os.path.splitext(os.path.basename(filepath))[0]}"
+            
+            imported_collection.objects.link(combined)
+            for coll in combined.users_collection:
+                if coll != imported_collection:
+                    coll.objects.unlink(combined)
+                    
+            empty = empties[i]
+            if empty:
+                orig_matrix = combined.matrix_world.copy()
+                combined.parent = empty
+                combined.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+                combined.matrix_local = orig_matrix
+                
+            context.window_manager.progress_update(i + 1)
+            
+        context.window_manager.progress_end()
+        return {'FINISHED'}
+
 # ==============================================================================
 # UI PANELS
 # ==============================================================================
@@ -1143,6 +1385,13 @@ class VIEW3D_PT_zoetrope_settings(bpy.types.Panel):
             
             box.separator()
             box.operator("object.create_frame_template", icon='MESH_CYLINDER')
+            
+            box.separator()
+            box.label(text="Mass Import Frames", icon='IMPORT')
+            box.prop(settings, "export_dir", text="Directory")
+            row = box.row()
+            row.scale_y = 1.5
+            row.operator("object.import_raw_zoetrope_frames", icon='MESH_DATA', text="Import All OBJs to Empties")
 
 class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
@@ -1192,6 +1441,9 @@ class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
                 row = box.row()
                 row.scale_y = 1.5
                 row.operator("object.export_zoetrope_frames", icon='MESH_DATA', text="Export Frames")
+                row = box.row()
+                row.scale_y = 1.5
+                row.operator("object.import_zoetrope_frames", icon='IMPORT', text="Import Frames")
                 
             else:
                 layout.separator()
@@ -1233,6 +1485,9 @@ class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
                 row = box.row()
                 row.scale_y = 1.5
                 row.operator("object.export_zoetrope_frames", icon='MESH_DATA', text="Export Frames")
+                row = box.row()
+                row.scale_y = 1.5
+                row.operator("object.import_zoetrope_frames", icon='IMPORT', text="Import Frames")
 
 # ==============================================================================
 # REGISTRATION
@@ -1246,6 +1501,8 @@ classes = (
     OBJECT_OT_clear_mappings,
     OBJECT_OT_batch_zoetrope_baker,
     OBJECT_OT_export_zoetrope_frames,
+    OBJECT_OT_import_zoetrope_frames,
+    OBJECT_OT_import_raw_zoetrope_frames,
     VIEW3D_PT_zoetrope_main,
     VIEW3D_PT_zoetrope_settings,
     VIEW3D_PT_zoetrope_baker
