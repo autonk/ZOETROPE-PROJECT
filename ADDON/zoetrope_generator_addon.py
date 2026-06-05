@@ -758,6 +758,15 @@ class ZoetropeGeneratorSettings(bpy.types.PropertyGroup):
         subtype='DIR_PATH',
         default=""
     )
+    raw_mismatch_strategy: bpy.props.EnumProperty(
+        name="Mismatch Strategy",
+        description="How to handle frame length mismatches",
+        items=[
+            ('INTERPOLATE', "Interpolate", "Compress or stretch to fit available frames", 'MOD_TIME', 0),
+            ('CLIP', "Clip (1:1)", "Play 1:1. Clips end if too long, clips beginning if too short.", 'MOD_DATA_TRANSFER', 1)
+        ],
+        default='INTERPOLATE'
+    )
 
 class OBJECT_OT_generate_zoetrope(bpy.types.Operator):
     """Generate a Zoetrope based on the selected settings"""
@@ -1368,10 +1377,6 @@ class OBJECT_OT_import_raw_zoetrope_frames(bpy.types.Operator):
             return {'CANCELLED'}
             
         import os
-        if not outdir or not os.path.exists(outdir):
-            self.report({'ERROR'}, "Invalid or missing frames directory. Set the Export Directory below.")
-            return {'CANCELLED'}
-            
         import glob
         import mathutils
         
@@ -1389,6 +1394,7 @@ class OBJECT_OT_import_raw_zoetrope_frames(bpy.types.Operator):
             
         empties.sort(key=lambda x: x.name)
         num_empties = len(empties)
+        num_files = len(files)
         
         imported_collection = None
         for child in zoe.children:
@@ -1403,11 +1409,28 @@ class OBJECT_OT_import_raw_zoetrope_frames(bpy.types.Operator):
             imported_collection = bpy.data.collections.new("Imported_Frames")
             zoe.children.link(imported_collection)
             
-        loop_count = min(len(files), num_empties)
-        context.window_manager.progress_begin(0, loop_count)
+        context.window_manager.progress_begin(0, num_empties)
         
-        for i in range(loop_count):
-            filepath = files[i]
+        mismatch_strategy = settings.raw_mismatch_strategy
+        
+        for i in range(num_empties):
+            if mismatch_strategy == 'CLIP':
+                if num_files < num_empties:
+                    # Too short: map to the LAST len(files) empties
+                    start_empty_idx = num_empties - num_files
+                    if i < start_empty_idx:
+                        continue
+                    file_idx = i - start_empty_idx
+                else:
+                    # Too long: play 1:1, clip end
+                    file_idx = i
+            else: # INTERPOLATE
+                file_idx = int(round((i / max(1, num_empties - 1)) * (num_files - 1)))
+                
+            if file_idx >= num_files:
+                break
+                
+            filepath = files[file_idx]
             
             objs_before = set(bpy.data.objects)
             
@@ -1539,6 +1562,17 @@ class VIEW3D_PT_zoetrope_settings(bpy.types.Panel):
             box.separator()
             box.label(text="Mass Import Frames", icon='IMPORT')
             box.prop(settings, "export_dir", text="Directory")
+            
+            # Show mismatch warning
+            import os, glob
+            outdir = bpy.path.abspath(settings.export_dir)
+            if zoe and outdir and os.path.exists(outdir):
+                files = glob.glob(os.path.join(outdir, "*.obj"))
+                empties_count = sum(1 for obj in zoe.all_objects if obj.name.startswith("Frame_") and obj.type == 'EMPTY')
+                if len(files) != empties_count and len(files) > 0 and empties_count > 0:
+                    box.label(text=f"Mismatch: {len(files)} OBJs vs {empties_count} frames", icon='ERROR')
+                    box.prop(settings, "raw_mismatch_strategy")
+                    
             row = box.row()
             row.scale_y = 1.5
             row.operator("object.import_raw_zoetrope_frames", icon='MESH_DATA', text="Import All OBJs to Empties")
