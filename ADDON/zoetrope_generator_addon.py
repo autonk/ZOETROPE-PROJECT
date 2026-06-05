@@ -15,6 +15,156 @@ import math
 from mathutils import Vector
 import mathutils
 
+import urllib.request
+import urllib.error
+import os
+import json
+import base64
+import threading
+from datetime import datetime
+
+# ========================================================================
+# AUTO-UPDATER SETTINGS
+# ========================================================================
+GITHUB_USER = "CorridorCrew"
+GITHUB_REPO = "Zoetrope_Tools"
+GITHUB_BRANCH = "main"
+GITHUB_FILE_PATH = "ADDON/zoetrope_generator_addon.py"
+GITHUB_TOKEN = "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"
+# ========================================================================
+
+remote_info = {'checked': False, 'has_update': False, 'sha': None, 'date': None}
+
+def get_metadata_path():
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), "zoetrope_updater_meta.json")
+
+def get_local_meta():
+    path = get_metadata_path()
+    if os.path.exists(path):
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception: pass
+    return {'sha': None, 'date': None}
+
+def save_local_meta(sha, date_str):
+    try:
+        with open(get_metadata_path(), 'w', encoding='utf-8') as f:
+            json.dump({'sha': sha, 'date': date_str}, f)
+    except Exception: pass
+
+def get_github_headers():
+    headers = {'User-Agent': 'Mozilla/5.0 Blender Addon Updater', 'Accept': 'application/vnd.github.v3+json'}
+    if GITHUB_TOKEN and "XXXXX" not in GITHUB_TOKEN:
+        headers['Authorization'] = f"Bearer {GITHUB_TOKEN}"
+    return headers
+
+def format_date(iso_str):
+    if not iso_str: return "Unknown"
+    try:
+        dt = datetime.strptime(iso_str.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+        return dt.strftime("%b %d, %Y - %H:%M")
+    except: return iso_str
+
+def background_check_thread():
+    global remote_info
+    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1"
+    try:
+        req = urllib.request.Request(commits_url, headers=get_github_headers())
+        with urllib.request.urlopen(req) as response:
+            commits = json.loads(response.read().decode('utf-8'))
+        if commits:
+            remote_sha = commits[0].get('sha')
+            remote_date = commits[0].get('commit', {}).get('author', {}).get('date')
+            local_sha = get_local_meta().get('sha')
+            remote_info.update({'sha': remote_sha, 'date': remote_date, 'has_update': (remote_sha != local_sha), 'checked': True})
+    except Exception: pass
+
+def start_background_check():
+    t = threading.Thread(target=background_check_thread)
+    t.daemon = True
+    t.start()
+
+def force_download_update():
+    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1"
+    content_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?ref={GITHUB_BRANCH}"
+    headers = get_github_headers()
+    try:
+        req_c = urllib.request.Request(commits_url, headers=headers)
+        with urllib.request.urlopen(req_c) as response:
+            commits = json.loads(response.read().decode('utf-8'))
+        if not commits: return False, "No commits found."
+        remote_sha = commits[0].get('sha')
+        remote_date = commits[0].get('commit', {}).get('author', {}).get('date')
+        
+        req_f = urllib.request.Request(content_url, headers=headers)
+        with urllib.request.urlopen(req_f) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        content_b64 = data.get('content', '')
+        if not content_b64: return False, "Empty content."
+        code = base64.b64decode(content_b64).decode('utf-8')
+        
+        with open(os.path.realpath(__file__), 'w', encoding='utf-8') as f:
+            f.write(code)
+            
+        save_local_meta(remote_sha, remote_date)
+        remote_info['has_update'] = False
+        return True, "Update downloaded! Please RESTART Blender to apply changes."
+    except Exception as e:
+        return False, str(e)
+
+class ZOETROPE_OT_update_self(bpy.types.Operator):
+    bl_idname = "zoetrope.update_self"
+    bl_label = "Update Now"
+    bl_description = "Downloads and applies the latest update"
+    def execute(self, context):
+        success, msg = force_download_update()
+        if not success:
+            self.report({'ERROR'}, f"Update failed: {msg}")
+        else:
+            self.report({'INFO'}, msg)
+            def draw(self, context):
+                self.layout.label(text="Update Downloaded successfully!")
+                self.layout.label(text="Please restart Blender for the changes to take effect.", icon='INFO')
+            bpy.context.window_manager.popup_menu(draw, title="Zoetrope Updater", icon='INFO')
+        return {'FINISHED'}
+
+class ZOETROPE_PT_updater_panel(bpy.types.Panel):
+    bl_label = "Zoetrope Updater"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Zoetrope'
+    bl_options = {'DEFAULT_CLOSED'}
+    def draw(self, context):
+        layout = self.layout
+        local_meta = get_local_meta()
+        box = layout.box()
+        box.label(text="Current Version:", icon='FILE_TICK')
+        col = box.column(align=True)
+        if local_meta.get('sha'):
+            col.label(text=f"Commit: {local_meta['sha'][:7]}")
+            col.label(text=f"Date: {format_date(local_meta['date'])}")
+        else:
+            col.label(text="Status: Unversioned (Initial Install)")
+            
+        if remote_info['checked']:
+            if remote_info['has_update']:
+                warn_box = layout.box()
+                warn_box.label(text="⚠️ Update Available!", icon='ERROR')
+                wcol = warn_box.column(align=True)
+                wcol.label(text=f"New Commit: {remote_info['sha'][:7]}")
+                wcol.label(text=f"New Date: {format_date(remote_info['date'])}")
+                layout.separator()
+                layout.operator("zoetrope.update_self", icon='IMPORT', text="Download Update")
+            else:
+                layout.separator()
+                layout.label(text="You are on the latest version.", icon='CHECKMARK')
+                layout.operator("zoetrope.update_self", icon='FILE_REFRESH', text="Force Re-download")
+        else:
+            layout.separator()
+            layout.label(text="Checking GitHub for updates...", icon='TIME')
+            layout.operator("zoetrope.update_self", icon='FILE_REFRESH', text="Manual Update")
+
 # ==============================================================================
 # BASIC ZOETROPE GENERATOR
 # ==============================================================================
@@ -1496,6 +1646,8 @@ class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
 classes = (
     ZoetropeMappingItem,
     ZoetropeGeneratorSettings,
+    ZOETROPE_OT_update_self,
+    ZOETROPE_PT_updater_panel,
     OBJECT_OT_generate_zoetrope,
     OBJECT_OT_create_frame_template,
     OBJECT_OT_clear_mappings,
@@ -1550,3 +1702,11 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+    
+# Start background check timer when the module loads
+try:
+    if bpy.app.timers.is_registered(start_background_check):
+        bpy.app.timers.unregister(start_background_check)
+    bpy.app.timers.register(start_background_check, first_interval=3.0)
+except Exception:
+    pass
