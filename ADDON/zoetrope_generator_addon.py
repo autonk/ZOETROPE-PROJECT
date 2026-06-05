@@ -1476,6 +1476,33 @@ class OBJECT_OT_import_raw_zoetrope_frames(bpy.types.Operator):
             
         context.window_manager.progress_end()
         return {'FINISHED'}
+class OBJECT_OT_clear_all_frames(bpy.types.Operator):
+    """Deletes all baked and imported frames from the active zoetrope"""
+    bl_idname = "object.clear_all_frames"
+    bl_label = "Clear All Frames"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        settings = context.scene.zoetrope_generator
+        zoe = settings.active_zoetrope
+        
+        if not zoe:
+            self.report({'WARNING'}, "No active zoetrope selected.")
+            return {'CANCELLED'}
+            
+        cleared = 0
+        for child in list(zoe.children):
+            if child.name in ["Baked_Frames", "Imported_Frames"]:
+                for obj in list(child.objects):
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                cleared += 1
+                
+        if cleared == 0:
+            self.report({'INFO'}, "No frames found to clear.")
+        else:
+            self.report({'INFO'}, "Successfully cleared all frames.")
+            
+        return {'FINISHED'}
 
 # ==============================================================================
 # UI PANELS
@@ -1576,6 +1603,10 @@ class VIEW3D_PT_zoetrope_settings(bpy.types.Panel):
             row = box.row()
             row.scale_y = 1.5
             row.operator("object.import_raw_zoetrope_frames", icon='MESH_DATA', text="Import All OBJs to Empties")
+            
+            box.separator()
+            row = box.row()
+            row.operator("object.clear_all_frames", icon='TRASH', text="Clear All Frames")
 
 class VIEW3D_PT_zoetrope_baker(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
@@ -1689,6 +1720,7 @@ classes = (
     OBJECT_OT_export_zoetrope_frames,
     OBJECT_OT_import_zoetrope_frames,
     OBJECT_OT_import_raw_zoetrope_frames,
+    OBJECT_OT_clear_all_frames,
     VIEW3D_PT_zoetrope_main,
     VIEW3D_PT_zoetrope_settings,
     VIEW3D_PT_zoetrope_baker
