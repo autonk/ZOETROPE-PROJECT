@@ -14,6 +14,15 @@ def main():
         print(f"PROGRESS: 0/1 Error: Invalid output directory {outdir}")
         sys.exit(1)
 
+    start_frame = None
+    end_frame = None
+    if len(argv) >= 3:
+        try:
+            start_frame = int(argv[1])
+            end_frame = int(argv[2])
+        except ValueError:
+            print("PROGRESS: 0/1 Warning: start_frame and end_frame must be integers. Ignoring.")
+
     # Find the target animation collection
     # If the user has a zoetrope mapping active, use that. Otherwise use "Animation" collection.
     target_anim_col = None
@@ -55,17 +64,25 @@ def main():
         if empties_count > 0:
             max_frame = empties_count
 
-    print(f"Total Frames to Export: {max_frame}")
+    if start_frame is not None and end_frame is not None:
+        actual_start = start_frame
+        actual_end = end_frame
+    else:
+        actual_start = 1
+        actual_end = max_frame
+        
+    total_frames = max(1, (actual_end - actual_start) + 1)
+    print(f"Total Frames to Export: {total_frames} (Range: {actual_start} to {actual_end})")
 
     depsgraph = bpy.context.evaluated_depsgraph_get()
 
     # Deselect all
     bpy.ops.object.select_all(action='DESELECT')
 
-    for i in range(max_frame):
-        print(f"PROGRESS: {i}/{max_frame} Evaluating Frame {i+1}...")
+    for i, frame in enumerate(range(actual_start, actual_end + 1)):
+        print(f"PROGRESS: {i}/{total_frames} Evaluating Frame {frame}...")
         
-        bpy.context.scene.frame_set(i + 1)
+        bpy.context.scene.frame_set(frame)
         bpy.context.view_layer.update()
         depsgraph = bpy.context.evaluated_depsgraph_get()
         
