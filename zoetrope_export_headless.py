@@ -83,6 +83,19 @@ def main():
                 if mat.name not in new_mesh.materials:
                     new_mesh.materials.append(mat)
             
+            # Force active vertex color / color attribute to ensure it exports every frame
+            if hasattr(new_mesh, 'color_attributes') and len(new_mesh.color_attributes) > 0:
+                try:
+                    new_mesh.color_attributes.active_color_index = 0
+                    new_mesh.color_attributes.render_color_index = 0
+                except AttributeError:
+                    pass
+            elif hasattr(new_mesh, 'vertex_colors') and len(new_mesh.vertex_colors) > 0:
+                try:
+                    new_mesh.vertex_colors.active_index = 0
+                except AttributeError:
+                    pass
+            
             bpy.context.scene.collection.objects.link(new_obj)
             temp_objects.append(new_obj)
             
@@ -91,6 +104,9 @@ def main():
             temp_obj.select_set(True)
             
         bpy.context.view_layer.objects.active = temp_objects[0]
+        
+        # Update the view layer so the exporter sees the new objects and attributes correctly
+        bpy.context.view_layer.update()
         
         out_path = os.path.join(outdir, f"frame_{i+1:03d}.obj")
         
