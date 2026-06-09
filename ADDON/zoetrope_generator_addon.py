@@ -53,8 +53,14 @@ def save_local_meta(sha, date_str):
             json.dump({'sha': sha, 'date': date_str}, f)
     except Exception: pass
 
+import time
+
 def get_github_headers():
-    headers = {'User-Agent': 'Mozilla/5.0 Blender Addon Updater', 'Accept': 'application/vnd.github.v3+json'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 Blender Addon Updater', 
+        'Accept': 'application/vnd.github.v3+json',
+        'Cache-Control': 'no-cache'
+    }
     if GITHUB_TOKEN and "XXXXX" not in GITHUB_TOKEN:
         headers['Authorization'] = f"Bearer {GITHUB_TOKEN}"
     return headers
@@ -68,7 +74,7 @@ def format_date(iso_str):
 
 def background_check_thread():
     global remote_info
-    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1"
+    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1&t={time.time()}"
     try:
         req = urllib.request.Request(commits_url, headers=get_github_headers())
         with urllib.request.urlopen(req) as response:
@@ -86,8 +92,8 @@ def start_background_check():
     t.start()
 
 def force_download_update():
-    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1"
-    content_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?ref={GITHUB_BRANCH}"
+    commits_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/commits?path={GITHUB_FILE_PATH}&sha={GITHUB_BRANCH}&per_page=1&t={time.time()}"
+    content_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}?ref={GITHUB_BRANCH}&t={time.time()}"
     headers = get_github_headers()
     try:
         req_c = urllib.request.Request(commits_url, headers=headers)
@@ -129,6 +135,16 @@ class ZOETROPE_OT_update_self(bpy.types.Operator):
             bpy.context.window_manager.popup_menu(draw, title="Zoetrope Updater", icon='INFO')
         return {'FINISHED'}
 
+class ZOETROPE_OT_check_updates(bpy.types.Operator):
+    bl_idname = "zoetrope.check_updates"
+    bl_label = "Check Latest Update"
+    bl_description = "Checks GitHub for the latest version"
+    def execute(self, context):
+        global remote_info
+        remote_info['checked'] = False
+        start_background_check()
+        return {'FINISHED'}
+
 class ZOETROPE_PT_updater_panel(bpy.types.Panel):
     bl_label = "Zoetrope Updater"
     bl_space_type = 'VIEW_3D'
@@ -159,6 +175,7 @@ class ZOETROPE_PT_updater_panel(bpy.types.Panel):
             else:
                 layout.separator()
                 layout.label(text="You are on the latest version.", icon='CHECKMARK')
+                layout.operator("zoetrope.check_updates", icon='URL', text="Check Latest Update")
                 layout.operator("zoetrope.update_self", icon='FILE_REFRESH', text="Force Re-download")
         else:
             layout.separator()
@@ -1712,6 +1729,7 @@ classes = (
     ZoetropeMappingItem,
     ZoetropeGeneratorSettings,
     ZOETROPE_OT_update_self,
+    ZOETROPE_OT_check_updates,
     ZOETROPE_PT_updater_panel,
     OBJECT_OT_generate_zoetrope,
     OBJECT_OT_create_frame_template,
